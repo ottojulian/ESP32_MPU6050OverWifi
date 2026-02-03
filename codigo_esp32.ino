@@ -2,24 +2,29 @@
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <OSCMessage.h>
+#include <OSCBundle.h>
 #include <WiFiUdp.h>
 #include <WiFi.h>
-
-
-// IMPORTANTE!!//
-// Compilar usando el board ES32 Dev Module, sinó o no compila, o compila pero no conecta al wifi.
-// Ahora si, el código:
 
 ////////////////////////////////
 //////// INIT VARIABLES ////////
 ////////////////////////////////
 
+// ---------- BOTONES ----------
+const int boton1Pin = 33;
+const int boton2Pin = 32;
+bool boton1State = false;
+bool boton2State = false;
 
-// Loop Rate:
+// ---------- LED RGB (ÁNODO COMÚN) ----------
+const int ledR = 27;
+const int ledG = 26;
+const int ledB = 25;
+
+// ---------- LOOP RATE ----------
 int mseg_delay = 10;
 
-// EWMA:
-int umbral = 20; //--> variable vieja, reivsar
+// ---------- EWMA ----------
 float alpha = 0.2;
 float wma_x = 0.0;
 float wma_y = 0.0;
@@ -28,39 +33,40 @@ float wma_rol = 0.0;
 float wma_pic = 0.0;
 float wma_yaw = 0.0;
 
-//OSC addresses:
-const char addr_sensores[] = "/4/sensores";
-const char addr_loopRate[] = "/4/loopRate";
+// ---------- OSC ADDRESSES ----------
+const char addr_sensores[]  = "/4/sensores";
+const char addr_loopRate[]  = "/4/loopRate";
 const char addr_ewmaAlpha[] = "/4/ewmaAlpha";
+const char addr_boton1[]    = "/boton1";
+const char addr_boton2[]    = "/boton2";
 
 ////////////////////////////////
 //////// NETWORK SETUP /////////
 ////////////////////////////////
 
-// IP:
-IPAddress staticIP(192, 168, 1, 102);  // IP local ### Me parece que no le da bola a esto
-IPAddress gateway(192, 168, 1, 1);    // Gateway
-IPAddress subnet(255, 255, 255, 0);   // Subnet mask
+// IP
+IPAddress staticIP(10, 1, 101, 171);
+IPAddress gateway(10, 1, 103, 254);
+IPAddress subnet(255, 255, 252, 0);
 
-const IPAddress outIp(192, 168, 1, 255);  // IP destino ### Probar con 255 para broadcast
-
-// UDP:
-const unsigned int outPort = 9000;    // Puerto UPD destino
-const unsigned int localPort = 8000;  // Puerto UPD destino
-
-// Autenticación WIFI:
-
-char ssid[] = "lowpoly99";
-char pass[] = "lowpoly99";
+const IPAddress outIp(10, 1, 103, 255);
 
 /*
-char ssid[] = "open-score";
-char pass[] = "0p3n-5c0r3";
+IPAddress staticIP(192, 168, 1, 102);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
 
+const IPAddress outIp(192, 168, 1, 255);
+*/
 
+// UDP
+const unsigned int outPort   = 9000;
+const unsigned int localPort = 8000;
+
+// WIFI
 char ssid[] = "LAB1507";
 char pass[] = "7051BAL!";
-*/
+
 ////////////////////////////////
 ////////// INSTANCIAS //////////
 ////////////////////////////////
@@ -72,62 +78,48 @@ Adafruit_MPU6050 mpu;
 ////////// FUNCIONES ///////////
 ////////////////////////////////
 
-float umbralToBool(int value, int umbral) {
-  /* Detecta si hubo golpe */
-  if (value >= umbral) {
-
-    return 1.0;
-  } else {
-    return 0.0;
-  }
-}
-
 void loopRate(OSCMessage &msg) {
-  /* Cambia los milisegundos del delay al final del loop */
   if (msg.isInt(0)) {
     if (msg.getInt(0) >= 5) {
       mseg_delay = msg.getInt(0);
       Serial.print("Nuevo Loop Rate: ");
       Serial.println(mseg_delay);
-      Serial.print("");
     }
   }
 }
 
 void ewmaAlpha(OSCMessage &msg) {
-  /* Calibra el alpha para el suavizado de los valores de acc y gyr */
   if (msg.isFloat(0)) {
-    umbral = msg.getFloat(0);
-    if (umbral >= 0 && umbral <= 1) {
+    float newAlpha = msg.getFloat(0);
+    if (newAlpha >= 0.0 && newAlpha <= 1.0) {
+      alpha = newAlpha;
       Serial.print("Nuevo Alpha: ");
       Serial.println(alpha);
-      Serial.print("");
-    } else {
-      Serial.print("Valor alpha fuera de rango! (");
-      Serial.print(umbral);
-      Serial.println(")");
     }
   }
 }
 
 void receiveMessage() {
-  /* Recive mensaje OSC */
-  OSCMessage inmsg;  // Crea mensaje para recibir valores
+  OSCMessage inmsg;
   int size = Udp.parsePacket();
   if (size > 0) {
-    while (size--) {
-      inmsg.fill(Udp.read());
-    }
+    while (size--) inmsg.fill(Udp.read());
     if (!inmsg.hasError()) {
       inmsg.dispatch(addr_loopRate, loopRate);
       inmsg.dispatch(addr_ewmaAlpha, ewmaAlpha);
-    } else {
-      auto error = inmsg.getError();
-      Serial.print("ERROR en mensaje entrante: ");
-      Serial.println(error);
-      Serial.print("");
     }
   }
+}
+
+////////////////////////////////
+////////// LED UTILS ///////////
+////////////////////////////////
+
+// Ánodo común: LOW = encendido, HIGH = apagado
+void setLed(bool r, bool g, bool b) {
+  digitalWrite(ledR, r ? LOW : HIGH);
+  digitalWrite(ledG, g ? LOW : HIGH);
+  digitalWrite(ledB, b ? LOW : HIGH);
 }
 
 ////////////////////////////////
@@ -135,123 +127,89 @@ void receiveMessage() {
 ////////////////////////////////
 
 void setup(void) {
-  // Inicialización Serial:
   Serial.begin(115200);
-
-  //Inicialización Serial (para sensores):
-  /*
-  while (!Serial) {
-    delay(10);                    // Espera a que conecte el serial
-  }
-  */
-
   delay(1000);
 
   Serial.println("////////////////////////////////");
-  Serial.println("////////// RAQUETA 2 ///////////");
+  Serial.println("////////// JOYSTICK 1 //////////");
   Serial.println("////////////////////////////////");
 
-  //Inicialización WIFI:
-  Serial.println("-Conectando a Wi-Fi-");
+  // ---------- LED ----------
+  pinMode(ledR, OUTPUT);
+  pinMode(ledG, OUTPUT);
+  pinMode(ledB, OUTPUT);
 
+  // Inicialmente apagado
+  setLed(false, false, false);
+
+  // ---------- WIFI ----------
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true);
   delay(100);
 
-  WiFi.begin(ssid, pass);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print("status = ");
-    Serial.println(WiFi.status());
+  // Aplico IP ESTÁTICA
+  if (!WiFi.config(staticIP, gateway, subnet)) {
+    Serial.println("Error configurando IP estática");
   }
 
-  Serial.print("Conectado a Wi-Fi");
+  // Intento conectarme a la red
+  WiFi.begin(ssid, pass);
 
-  // Inicialización UDP:
+  // Mientras se conecta, parpadea cyan
+  while (WiFi.status() != WL_CONNECTED) {
+    setLed(false, true, true);   // Cyan ON
+    delay(200);
+    setLed(false, false, false); // OFF
+    delay(200);
+  }
+
+  // Printeo datos de red del ESP32 post conexión
+  Serial.println("WiFi conectado");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("Gateway: ");
+  Serial.println(WiFi.gatewayIP());
+  Serial.print("Subnet: ");
+  Serial.println(WiFi.subnetMask());
+
   Udp.begin(localPort);
-
-  Serial.print("UDP iniciado - escuchando en: ");
-  Serial.print(WiFi.localIP());
-  Serial.print(":");
+  Serial.print("Puerto UDP: ");
   Serial.println(localPort);
-  Serial.print("MAC: ");
+
+  Serial.print("MAC ESP32: ");
   Serial.println(WiFi.macAddress());
 
-  ////////////////////////////////
-  //////////// MPU6050 ///////////
-  ////////////////////////////////
+  // ---------- BOTONES ----------
+  pinMode(boton1Pin, INPUT_PULLUP);
+  pinMode(boton2Pin, INPUT_PULLUP);
 
-  // Inicialización de MPU6050:
-  Serial.println("Adafruit MPU6050 test!");
+  // ---------- MPU6050 ----------
   if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
+    Serial.println("MPU6050 no encontrado");
+    while (true) {
+      setLed(true, false, false);
+      delay(100);  
+      setLed(false, false, false);
+      delay(100);
+      setLed(true, false, false);
+      delay(100);  
+      setLed(false, false, false);
+      delay(1000);
+      if(mpu.begin()) {
+        break;
+
+      }
     }
   }
-  Serial.println("MPU6050 Found!");
 
-  // Setup del MPU6050: ### Hay que revisar esto
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-  Serial.print("Accelerometer range set to: ");
-  switch (mpu.getAccelerometerRange()) {
-    case MPU6050_RANGE_2_G:
-      Serial.println("+-2G");
-      break;
-    case MPU6050_RANGE_4_G:
-      Serial.println("+-4G");
-      break;
-    case MPU6050_RANGE_8_G:
-      Serial.println("+-8G");
-      break;
-    case MPU6050_RANGE_16_G:
-      Serial.println("+-16G");
-      break;
-  }
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
-  Serial.print("Gyro range set to: ");
-  switch (mpu.getGyroRange()) {
-    case MPU6050_RANGE_250_DEG:
-      Serial.println("+- 250 deg/s");
-      break;
-    case MPU6050_RANGE_500_DEG:
-      Serial.println("+- 500 deg/s");
-      break;
-    case MPU6050_RANGE_1000_DEG:
-      Serial.println("+- 1000 deg/s");
-      break;
-    case MPU6050_RANGE_2000_DEG:
-      Serial.println("+- 2000 deg/s");
-      break;
-  }
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-  Serial.print("Filter bandwidth set to: ");
-  switch (mpu.getFilterBandwidth()) {
-    case MPU6050_BAND_260_HZ:
-      Serial.println("260 Hz");
-      break;
-    case MPU6050_BAND_184_HZ:
-      Serial.println("184 Hz");
-      break;
-    case MPU6050_BAND_94_HZ:
-      Serial.println("94 Hz");
-      break;
-    case MPU6050_BAND_44_HZ:
-      Serial.println("44 Hz");
-      break;
-    case MPU6050_BAND_21_HZ:
-      Serial.println("21 Hz");
-      break;
-    case MPU6050_BAND_10_HZ:
-      Serial.println("10 Hz");
-      break;
-    case MPU6050_BAND_5_HZ:
-      Serial.println("5 Hz");
-      break;
-  }
 
-  Serial.println("");
-  delay(100);
+  Serial.println("MPU6050 OK");
+
+  // Conectado: verde fijo
+  setLed(false, true, false);
 }
 
 ////////////////////////////////
@@ -259,62 +217,53 @@ void setup(void) {
 ////////////////////////////////
 
 void loop() {
-  // Recibir mensajes OSC por UPD:
+
+  // ---------- OSC IN ----------
   receiveMessage();
 
-  // Crear el mensaje OSC a enviar:
-  OSCMessage oscMsg(addr_sensores);
-
-  //// Acelerómetro y Giroscopio ////
-  // Tomar los eventos de los sensores:
+  // ---------- MPU ----------
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  // EWMA - calcular promedios:
-  wma_x = alpha * a.acceleration.x + (1 - alpha) * wma_x;
-  wma_y = alpha * a.acceleration.y + (1 - alpha) * wma_y;
-  wma_z = alpha * a.acceleration.z + (1 - alpha) * wma_z;
-  wma_rol = alpha * g.gyro.x + (1 - alpha) * wma_rol;
-  wma_pic = alpha * g.gyro.y + (1 - alpha) * wma_pic;
-  wma_yaw = alpha * g.gyro.z + (1 - alpha) * wma_yaw;
+  wma_x   = alpha * a.acceleration.x + (1 - alpha) * wma_x;
+  wma_y   = alpha * a.acceleration.y + (1 - alpha) * wma_y;
+  wma_z   = alpha * a.acceleration.z + (1 - alpha) * wma_z;
+  wma_rol = alpha * g.gyro.x         + (1 - alpha) * wma_rol;
+  wma_pic = alpha * g.gyro.y         + (1 - alpha) * wma_pic;
+  wma_yaw = alpha * g.gyro.z         + (1 - alpha) * wma_yaw;
 
-  //// Envío de mensaje OSC ////
-  // Agregar valores al mensaje:
-  //oscMsg.add(a.acceleration.x).add(a.acceleration.y).add(a.acceleration.z).add(g.gyro.x).add(g.gyro.y).add(g.gyro.z);   // versión sin smoothing
-  oscMsg.add(wma_x).add(wma_y).add(wma_z).add(wma_rol).add(wma_pic).add(wma_yaw);
+  // ---------- BOTONES ----------
+  boton1State = !digitalRead(boton1Pin);
+  boton2State = !digitalRead(boton2Pin);
 
-  // Enviar mensaje OSC por UDP:
+  // ---------- OSC BUNDLE ----------
+  OSCBundle bundle;
+
+  // Sensores
+  OSCMessage msgSens(addr_sensores);
+  msgSens.add(wma_x)
+         .add(wma_y)
+         .add(wma_z)
+         .add(wma_rol)
+         .add(wma_pic)
+         .add(wma_yaw);
+  bundle.add(msgSens);
+
+  // Botón 1
+  OSCMessage msgB1(addr_boton1);
+  msgB1.add(0.0f + boton1State);
+  bundle.add(msgB1);
+
+  // Botón 2
+  OSCMessage msgB2(addr_boton2);
+  msgB2.add(0.0f + boton2State);
+  bundle.add(msgB2);
+
+  // Envío único
   Udp.beginPacket(outIp, outPort);
-  oscMsg.send(Udp);
+  bundle.send(Udp);
   Udp.endPacket();
-  oscMsg.empty();  // Vacía el mensaje para recibir los próximos valores
+  bundle.empty();
 
-  ////////////////////////////////
-  //////// NETWORK SETUP /////////
-  ////////////////////////////////
-  /*
-  // Print out the values
-  Serial.print("(x, y, z): ");
-  Serial.print(a.acceleration.x);
-  Serial.print(", ");
-  Serial.print(a.acceleration.y);
-  Serial.print(", ");
-  Serial.print(a.acceleration.z);
-  Serial.print(". ");
-
-  Serial.print("(y, p, r): ");
-  Serial.print(g.gyro.x);
-  Serial.print(", ");
-  Serial.print(g.gyro.y);
-  Serial.print(", ");
-  Serial.print(g.gyro.z);
-  Serial.print(". ");
-
-  //  Serial.print("Temperature: ");
-  //  Serial.print(temp.temperature);
-  //  Serial.println(" degC");
-  */
-
-  //// Regulación del rate del script ////
   delay(mseg_delay);
 }
