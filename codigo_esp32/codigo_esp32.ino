@@ -10,6 +10,9 @@
 //////// INIT VARIABLES ////////
 ////////////////////////////////
 
+// ---------- FLAG WIFI ----------
+bool wifiReconnecting = false;
+
 // ---------- BOTONES ----------
 const int boton1Pin = 33;
 const int boton2Pin = 32;
@@ -33,18 +36,23 @@ float wma_rol = 0.0;
 float wma_pic = 0.0;
 float wma_yaw = 0.0;
 
+// ---------- MAC ADDRESS ----------
+String macAddressStr = "";
+
 // ---------- OSC ADDRESSES ----------
-const char addr_sensores[]  = "/4/sensores";
-const char addr_loopRate[]  = "/4/loopRate";
-const char addr_ewmaAlpha[] = "/4/ewmaAlpha";
+const char addr_sensores[]  = "/sensores";
+const char addr_loopRate[]  = "/loopRate";
+const char addr_ewmaAlpha[] = "/ewmaAlpha";
 const char addr_boton1[]    = "/boton1";
 const char addr_boton2[]    = "/boton2";
+const char addr_mac[]    = "/macaddress";
 
 ////////////////////////////////
 //////// NETWORK SETUP /////////
 ////////////////////////////////
 
 // IP
+
 IPAddress staticIP(10, 1, 101, 171);
 IPAddress gateway(10, 1, 103, 254);
 IPAddress subnet(255, 255, 252, 0);
@@ -64,9 +72,14 @@ const unsigned int outPort   = 9000;
 const unsigned int localPort = 8000;
 
 // WIFI
+
 char ssid[] = "LAB1507";
 char pass[] = "7051BAL!";
 
+/*
+char ssid[] = "lowpoly99";
+char pass[] = "lowpoly99";
+*/
 ////////////////////////////////
 ////////// INSTANCIAS //////////
 ////////////////////////////////
@@ -161,6 +174,11 @@ void setup(void) {
     delay(200);
     setLed(false, false, false); // OFF
     delay(200);
+    Serial.print("WiFi status: ");
+    Serial.println(WiFi.status());
+
+    WiFi.begin(ssid, pass);
+    delay(500);
   }
 
   // Printeo datos de red del ESP32 post conexión
@@ -176,6 +194,7 @@ void setup(void) {
   Serial.print("Puerto UDP: ");
   Serial.println(localPort);
 
+  macAddressStr = WiFi.macAddress();
   Serial.print("MAC ESP32: ");
   Serial.println(WiFi.macAddress());
 
@@ -217,6 +236,67 @@ void setup(void) {
 ////////////////////////////////
 
 void loop() {
+  // Chequeo que estoy conectado al wifi
+   if (WiFi.status() != WL_CONNECTED) {
+
+    // ---------- BUCLE DE RECONEXIÓN ----------
+    Serial.println("WiFi desconectado");
+    WiFi.disconnect();
+    WiFi.begin(ssid, pass);
+
+    // Mientras no se conecte, titilea el LED cyan
+    while (WiFi.status() != WL_CONNECTED) {
+      setLed(false, true, true);   // Cyan ON
+      delay(100);
+      setLed(false, false, false); // OFF
+      delay(100);
+      setLed(false, true, true);   // Cyan ON
+      delay(100);
+      setLed(false, false, false); // OFF
+      delay(100);
+      // Intento reconectar periódicamente
+      WiFi.disconnect();
+      WiFi.begin(ssid, pass);
+
+      Serial.print("WiFi status: ");
+      Serial.println(WiFi.status());
+      delay(1000);
+    }
+
+    // ---------- WIFI RECONECTADO ----------
+    Serial.println("WiFi reconectado");
+    Serial.print("IP: "); Serial.println(WiFi.localIP());
+    Serial.print("Gateway: "); Serial.println(WiFi.gatewayIP());
+    Serial.print("Subnet: "); Serial.println(WiFi.subnetMask());
+    Udp.begin(localPort);
+    Serial.print("Puerto UDP: "); Serial.println(localPort);
+    Serial.print("MAC ESP32: "); Serial.println(WiFi.macAddress());
+
+    // Conectado: verde fijo
+    setLed(false, true, false);
+  }
+
+// ---------- WIFI RECONECTADO ----------
+if (wifiReconnecting && WiFi.status() == WL_CONNECTED) {
+  wifiReconnecting = false;
+
+  Serial.println("WiFi reconectado");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.print("Gateway: ");
+  Serial.println(WiFi.gatewayIP());
+  Serial.print("Subnet: ");
+  Serial.println(WiFi.subnetMask());
+
+  Udp.begin(localPort);
+  Serial.print("Puerto UDP: ");
+  Serial.println(localPort);
+
+  Serial.print("MAC ESP32: ");
+  Serial.println(WiFi.macAddress());
+
+  setLed(false, true, false); // verde
+}
 
   // ---------- OSC IN ----------
   receiveMessage();
@@ -238,6 +318,11 @@ void loop() {
 
   // ---------- OSC BUNDLE ----------
   OSCBundle bundle;
+
+  // Mac address
+  OSCMessage msgMac(addr_mac);
+  msgMac.add(macAddressStr.c_str());  // enviar como string
+  bundle.add(msgMac);
 
   // Sensores
   OSCMessage msgSens(addr_sensores);
