@@ -25,7 +25,7 @@ const int ledG = 26;
 const int ledB = 25;
 
 // ---------- LOOP RATE ----------
-int mseg_delay = 10;
+int mseg_delay = 16;
 
 // ---------- EWMA ----------
 float alpha = 0.2;
@@ -50,22 +50,47 @@ const char addr_mac[]    = "/macaddress";
 ////////////////////////////////
 //////// NETWORK SETUP /////////
 ////////////////////////////////
+/*
+DESKTOP-2Q055UG 4525
+3p;2A849
+*/
 
-// IP
+/*
+// IP config superDDL 2.4
+IPAddress staticIP(192, 168, 0, 102);  // IP local ### Me parece que no le da bola a esto
+IPAddress gateway(192, 168, 0, 1);    // Gateway
+IPAddress subnet(255, 255, 255, 0);   // Subnet mask
 
+const IPAddress outIp(192, 168, 0, 107);  // IP destino ### Probar con 255 para broadcast
+
+*/
+
+/*
+// IP config LAB1507
 IPAddress staticIP(10, 1, 101, 171);
 IPAddress gateway(10, 1, 103, 254);
 IPAddress subnet(255, 255, 252, 0);
 
 const IPAddress outIp(10, 1, 103, 255);
+*/
 
 /*
+//IP config Lowpoly99
 IPAddress staticIP(192, 168, 1, 102);
 IPAddress gateway(192, 168, 1, 1);
 IPAddress subnet(255, 255, 255, 0);
 
-const IPAddress outIp(192, 168, 1, 255);
+const IPAddress outIp(192, 168, 1, 255); //IP destino. Último octeto en 255 para broadcas
 */
+
+//IP config dd-wrtt
+
+IPAddress staticIP(192, 168, 1, 102);
+IPAddress gateway(192, 168, 1, 1);
+IPAddress subnet(255, 255, 255, 0);
+
+const IPAddress outIp(192, 168, 1, 255); //IP destino. Último octeto en 255 para broadcas
+
 
 // UDP
 const unsigned int outPort   = 9000;
@@ -73,13 +98,25 @@ const unsigned int localPort = 8000;
 
 // WIFI
 
+/*
+char ssid[] = "superDDL 2.4";
+char pass[] = "FTZWCZM2KTZJ";
+*/
+
+/*
 char ssid[] = "LAB1507";
 char pass[] = "7051BAL!";
+*/
 
 /*
 char ssid[] = "lowpoly99";
 char pass[] = "lowpoly99";
 */
+ 
+char ssid[] = "dd-wrtt";
+char pass[] = "FTZWCZM2KTZJ";
+
+
 ////////////////////////////////
 ////////// INSTANCIAS //////////
 ////////////////////////////////
@@ -140,9 +177,9 @@ void setLed(bool r, bool g, bool b) {
 ////////////////////////////////
 
 void setup(void) {
-  Serial.begin(115200);
   delay(1000);
-
+  Serial.begin(9600);
+  
   Serial.println("////////////////////////////////");
   Serial.println("////////// JOYSTICK 1 //////////");
   Serial.println("////////////////////////////////");
@@ -349,6 +386,25 @@ if (wifiReconnecting && WiFi.status() == WL_CONNECTED) {
   bundle.send(Udp);
   Udp.endPacket();
   bundle.empty();
+
+/*
+  // Print out the values
+  Serial.print("(x, y, z): ");
+  Serial.print(a.acceleration.x);
+  Serial.print(", ");
+  Serial.print(a.acceleration.y);
+  Serial.print(", ");
+  Serial.print(a.acceleration.z);
+  Serial.println(". ");
+
+  Serial.print("(y, p, r): ");
+  Serial.print(g.gyro.x);
+  Serial.print(", ");
+  Serial.print(g.gyro.y);
+  Serial.print(", ");
+  Serial.print(g.gyro.z);
+  Serial.println(". ");
+*/
 
   delay(mseg_delay);
 }
