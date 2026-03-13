@@ -10,8 +10,19 @@
 //////// INIT VARIABLES ////////
 ////////////////////////////////
 
-// ---------- FLAG WIFI ----------
-bool wifiReconnecting = false;
+unsigned long lastUdpRestart = 0;
+const unsigned long udpRestartInterval = 15000; // 15 seconds
+
+// ---------- LOOP RATE ----------
+int mseg_delay = 20;
+
+// ---------- OSC ADDRESSES ----------
+const char addr_sensores[]  = "/sensores";
+const char addr_loopRate[]  = "/loopRate";
+const char addr_ewmaAlpha[] = "/ewmaAlpha";
+const char addr_boton1[]    = "/boton1";
+const char addr_boton2[]    = "/boton2";
+const char addr_mac[]       = "/macaddress";
 
 // ---------- BOTONES ----------
 const int boton1Pin = 33;
@@ -24,8 +35,8 @@ const int ledR = 27;
 const int ledG = 26;
 const int ledB = 25;
 
-// ---------- LOOP RATE ----------
-int mseg_delay = 16;
+// ---------- FLAG WIFI ----------
+bool wifiReconnecting = false;
 
 // ---------- EWMA ----------
 float alpha = 0.2;
@@ -39,83 +50,71 @@ float wma_yaw = 0.0;
 // ---------- MAC ADDRESS ----------
 String macAddressStr = "";
 
-// ---------- OSC ADDRESSES ----------
-const char addr_sensores[]  = "/sensores";
-const char addr_loopRate[]  = "/loopRate";
-const char addr_ewmaAlpha[] = "/ewmaAlpha";
-const char addr_boton1[]    = "/boton1";
-const char addr_boton2[]    = "/boton2";
-const char addr_mac[]    = "/macaddress";
-
 ////////////////////////////////
 //////// NETWORK SETUP /////////
 ////////////////////////////////
-/*
-DESKTOP-2Q055UG 4525
-3p;2A849
-*/
 
-/*
-// IP config superDDL 2.4
-IPAddress staticIP(192, 168, 0, 102);  // IP local ### Me parece que no le da bola a esto
-IPAddress gateway(192, 168, 0, 1);    // Gateway
-IPAddress subnet(255, 255, 255, 0);   // Subnet mask
+// ---------- NETWORK STRUCT ----------
+struct WifiNetwork {
+  const char* ssid;
+  const char* pass;
+  IPAddress staticIP;
+  IPAddress gateway;
+  IPAddress subnet;
+  IPAddress outIp;
+};
 
-const IPAddress outIp(192, 168, 0, 107);  // IP destino ### Probar con 255 para broadcast
+// ---------- NETWORK LIST ----------
+WifiNetwork networks[] = {
 
-*/
+  {
+    "superDDL 2.4",
+    "FTZWCZM2KTZJ",
+    IPAddress(192,168,0,102),
+    IPAddress(192,168,0,1),
+    IPAddress(255,255,255,0),
+    IPAddress(192,168,0,107)
+  },
 
-/*
-// IP config LAB1507
-IPAddress staticIP(10, 1, 101, 171);
-IPAddress gateway(10, 1, 103, 254);
-IPAddress subnet(255, 255, 252, 0);
+  {
+    "LAB1507",
+    "7051BAL!",
+    IPAddress(10,1,101,171),
+    IPAddress(10,1,103,254),
+    IPAddress(255,255,252,0),
+    IPAddress(10,1,103,255)
+  },
 
-const IPAddress outIp(10, 1, 103, 255);
-*/
+  {
+    "lowpoly99",
+    "lowpoly99",
+    IPAddress(192,168,1,102),
+    IPAddress(192,168,1,1),
+    IPAddress(255,255,255,0),
+    IPAddress(192,168,1,255)
+  },
 
-/*
-//IP config Lowpoly99
-IPAddress staticIP(192, 168, 1, 102);
-IPAddress gateway(192, 168, 1, 1);
-IPAddress subnet(255, 255, 255, 0);
+  {
+    "dd-wrtt",
+    "FTZWCZM2KTZJ",
+    IPAddress(192,168,1,102),
+    IPAddress(192,168,1,1),
+    IPAddress(255,255,255,0),
+    IPAddress(192,168,1,255)
+  }
 
-const IPAddress outIp(192, 168, 1, 255); //IP destino. Último octeto en 255 para broadcas
-*/
+};
 
-//IP config dd-wrtt
+const int networkCount = sizeof(networks) / sizeof(networks[0]);
 
-IPAddress staticIP(192, 168, 1, 102);
-IPAddress gateway(192, 168, 1, 1);
-IPAddress subnet(255, 255, 255, 0);
-
-const IPAddress outIp(192, 168, 1, 255); //IP destino. Último octeto en 255 para broadcas
-
+IPAddress staticIP;
+IPAddress gateway;
+IPAddress subnet;
+IPAddress outIp;
 
 // UDP
 const unsigned int outPort   = 9000;
 const unsigned int localPort = 8000;
-
-// WIFI
-
-/*
-char ssid[] = "superDDL 2.4";
-char pass[] = "FTZWCZM2KTZJ";
-*/
-
-/*
-char ssid[] = "LAB1507";
-char pass[] = "7051BAL!";
-*/
-
-/*
-char ssid[] = "lowpoly99";
-char pass[] = "lowpoly99";
-*/
- 
-char ssid[] = "dd-wrtt";
-char pass[] = "FTZWCZM2KTZJ";
-
 
 ////////////////////////////////
 ////////// INSTANCIAS //////////
@@ -127,6 +126,59 @@ Adafruit_MPU6050 mpu;
 ////////////////////////////////
 ////////// FUNCIONES ///////////
 ////////////////////////////////
+void refreshUDP() {
+  if (millis() - lastUdpRestart > udpRestartInterval) {
+    Serial.println("Refreshing UDP socket");
+    Udp.stop();
+    delay(10);
+    Udp.begin(localPort);
+    lastUdpRestart = millis();
+  }
+}
+
+bool connectToKnownWiFi() {
+
+  for (int i = 0; i < networkCount; i++) {
+
+    Serial.print("Intentando red: ");
+    Serial.println(networks[i].ssid);
+
+    WiFi.disconnect(true);
+    delay(200);
+
+    WiFi.config(
+      networks[i].staticIP,
+      networks[i].gateway,
+      networks[i].subnet
+    );
+
+    WiFi.begin(networks[i].ssid, networks[i].pass);
+
+    int timeout = 20;
+
+    while (WiFi.status() != WL_CONNECTED && timeout--) {
+      setLed(false, true, true);
+      delay(200);
+      setLed(false, false, false);
+      delay(200);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+
+      staticIP = networks[i].staticIP;
+      gateway  = networks[i].gateway;
+      subnet   = networks[i].subnet;
+      outIp    = networks[i].outIp;
+
+      Serial.println("Conectado a:");
+      Serial.println(networks[i].ssid);
+
+      return true;
+    }
+  }
+
+  return false;
+}
 
 void loopRate(OSCMessage &msg) {
   if (msg.isInt(0)) {
@@ -165,7 +217,6 @@ void receiveMessage() {
 ////////// LED UTILS ///////////
 ////////////////////////////////
 
-// Ánodo común: LOW = encendido, HIGH = apagado
 void setLed(bool r, bool g, bool b) {
   digitalWrite(ledR, r ? LOW : HIGH);
   digitalWrite(ledG, g ? LOW : HIGH);
@@ -184,41 +235,23 @@ void setup(void) {
   Serial.println("////////// JOYSTICK 1 //////////");
   Serial.println("////////////////////////////////");
 
-  // ---------- LED ----------
   pinMode(ledR, OUTPUT);
   pinMode(ledG, OUTPUT);
   pinMode(ledB, OUTPUT);
 
-  // Inicialmente apagado
   setLed(false, false, false);
 
-  // ---------- WIFI ----------
+  WiFi.setSleep(false);
+
   WiFi.mode(WIFI_STA);
   WiFi.disconnect(true);
   delay(100);
 
-  // Aplico IP ESTÁTICA
-  if (!WiFi.config(staticIP, gateway, subnet)) {
-    Serial.println("Error configurando IP estática");
+  while (!connectToKnownWiFi()) {
+    Serial.println("No se pudo conectar a ninguna red conocida");
+    delay(2000);
   }
 
-  // Intento conectarme a la red
-  WiFi.begin(ssid, pass);
-
-  // Mientras se conecta, parpadea cyan
-  while (WiFi.status() != WL_CONNECTED) {
-    setLed(false, true, true);   // Cyan ON
-    delay(200);
-    setLed(false, false, false); // OFF
-    delay(200);
-    Serial.print("WiFi status: ");
-    Serial.println(WiFi.status());
-
-    WiFi.begin(ssid, pass);
-    delay(500);
-  }
-
-  // Printeo datos de red del ESP32 post conexión
   Serial.println("WiFi conectado");
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
@@ -235,11 +268,9 @@ void setup(void) {
   Serial.print("MAC ESP32: ");
   Serial.println(WiFi.macAddress());
 
-  // ---------- BOTONES ----------
   pinMode(boton1Pin, INPUT_PULLUP);
   pinMode(boton2Pin, INPUT_PULLUP);
 
-  // ---------- MPU6050 ----------
   if (!mpu.begin()) {
     Serial.println("MPU6050 no encontrado");
     while (true) {
@@ -253,7 +284,6 @@ void setup(void) {
       delay(1000);
       if(mpu.begin()) {
         break;
-
       }
     }
   }
@@ -264,7 +294,6 @@ void setup(void) {
 
   Serial.println("MPU6050 OK");
 
-  // Conectado: verde fijo
   setLed(false, true, false);
 }
 
@@ -273,72 +302,36 @@ void setup(void) {
 ////////////////////////////////
 
 void loop() {
-  // Chequeo que estoy conectado al wifi
-   if (WiFi.status() != WL_CONNECTED) {
+/*
+  if (WiFi.status() != WL_CONNECTED) {
 
-    // ---------- BUCLE DE RECONEXIÓN ----------
     Serial.println("WiFi desconectado");
-    WiFi.disconnect();
-    WiFi.begin(ssid, pass);
 
-    // Mientras no se conecte, titilea el LED cyan
-    while (WiFi.status() != WL_CONNECTED) {
-      setLed(false, true, true);   // Cyan ON
-      delay(100);
-      setLed(false, false, false); // OFF
-      delay(100);
-      setLed(false, true, true);   // Cyan ON
-      delay(100);
-      setLed(false, false, false); // OFF
-      delay(100);
-      // Intento reconectar periódicamente
-      WiFi.disconnect();
-      WiFi.begin(ssid, pass);
-
-      Serial.print("WiFi status: ");
-      Serial.println(WiFi.status());
-      delay(1000);
+    while (!connectToKnownWiFi()) {
+      setLed(false, true, true);
+      delay(200);
+      setLed(false, false, false);
+      delay(200);
+      Serial.println("Reintentando conexión...");
     }
 
-    // ---------- WIFI RECONECTADO ----------
     Serial.println("WiFi reconectado");
     Serial.print("IP: "); Serial.println(WiFi.localIP());
     Serial.print("Gateway: "); Serial.println(WiFi.gatewayIP());
     Serial.print("Subnet: "); Serial.println(WiFi.subnetMask());
+
     Udp.begin(localPort);
     Serial.print("Puerto UDP: "); Serial.println(localPort);
+
     Serial.print("MAC ESP32: "); Serial.println(WiFi.macAddress());
 
-    // Conectado: verde fijo
     setLed(false, true, false);
   }
 
-// ---------- WIFI RECONECTADO ----------
-if (wifiReconnecting && WiFi.status() == WL_CONNECTED) {
-  wifiReconnecting = false;
-
-  Serial.println("WiFi reconectado");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Gateway: ");
-  Serial.println(WiFi.gatewayIP());
-  Serial.print("Subnet: ");
-  Serial.println(WiFi.subnetMask());
-
-  Udp.begin(localPort);
-  Serial.print("Puerto UDP: ");
-  Serial.println(localPort);
-
-  Serial.print("MAC ESP32: ");
-  Serial.println(WiFi.macAddress());
-
-  setLed(false, true, false); // verde
-}
-
-  // ---------- OSC IN ----------
   receiveMessage();
+*/
 
-  // ---------- MPU ----------
+  refreshUDP();
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
@@ -349,19 +342,15 @@ if (wifiReconnecting && WiFi.status() == WL_CONNECTED) {
   wma_pic = alpha * g.gyro.y         + (1 - alpha) * wma_pic;
   wma_yaw = alpha * g.gyro.z         + (1 - alpha) * wma_yaw;
 
-  // ---------- BOTONES ----------
   boton1State = !digitalRead(boton1Pin);
   boton2State = !digitalRead(boton2Pin);
 
-  // ---------- OSC BUNDLE ----------
   OSCBundle bundle;
 
-  // Mac address
   OSCMessage msgMac(addr_mac);
-  msgMac.add(macAddressStr.c_str());  // enviar como string
+  msgMac.add(macAddressStr.c_str());
   bundle.add(msgMac);
 
-  // Sensores
   OSCMessage msgSens(addr_sensores);
   msgSens.add(wma_x)
          .add(wma_y)
@@ -371,40 +360,18 @@ if (wifiReconnecting && WiFi.status() == WL_CONNECTED) {
          .add(wma_yaw);
   bundle.add(msgSens);
 
-  // Botón 1
   OSCMessage msgB1(addr_boton1);
   msgB1.add(0.0f + boton1State);
   bundle.add(msgB1);
 
-  // Botón 2
   OSCMessage msgB2(addr_boton2);
   msgB2.add(0.0f + boton2State);
   bundle.add(msgB2);
 
-  // Envío único
   Udp.beginPacket(outIp, outPort);
   bundle.send(Udp);
   Udp.endPacket();
   bundle.empty();
-
-/*
-  // Print out the values
-  Serial.print("(x, y, z): ");
-  Serial.print(a.acceleration.x);
-  Serial.print(", ");
-  Serial.print(a.acceleration.y);
-  Serial.print(", ");
-  Serial.print(a.acceleration.z);
-  Serial.println(". ");
-
-  Serial.print("(y, p, r): ");
-  Serial.print(g.gyro.x);
-  Serial.print(", ");
-  Serial.print(g.gyro.y);
-  Serial.print(", ");
-  Serial.print(g.gyro.z);
-  Serial.println(". ");
-*/
 
   delay(mseg_delay);
 }
