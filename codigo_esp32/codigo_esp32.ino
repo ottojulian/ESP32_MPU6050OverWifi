@@ -17,12 +17,10 @@ const unsigned long udpRestartInterval = 15000; // 15 seconds
 int mseg_delay = 20;
 
 // ---------- OSC ADDRESSES ----------
-const char addr_sensores[]  = "/sensores";
+
 const char addr_loopRate[]  = "/loopRate";
 const char addr_ewmaAlpha[] = "/ewmaAlpha";
-const char addr_boton1[]    = "/boton1";
-const char addr_boton2[]    = "/boton2";
-const char addr_mac[]       = "/macaddress";
+const char* oscAddress = "/player2";
 
 // ---------- BOTONES ----------
 const int boton1Pin = 33;
@@ -70,16 +68,16 @@ WifiNetwork networks[] = {
   {
     "superDDL 2.4",
     "FTZWCZM2KTZJ",
-    IPAddress(192,168,0,102),
+    IPAddress(192,168,0,101),
     IPAddress(192,168,0,1),
     IPAddress(255,255,255,0),
-    IPAddress(192,168,0,107)
+    IPAddress(192,168,0,255)
   },
 
   {
     "LAB1507",
     "7051BAL!",
-    IPAddress(10,1,101,171),
+    IPAddress(10,1,101,170),
     IPAddress(10,1,103,254),
     IPAddress(255,255,252,0),
     IPAddress(10,1,103,255)
@@ -88,7 +86,7 @@ WifiNetwork networks[] = {
   {
     "lowpoly99",
     "lowpoly99",
-    IPAddress(192,168,1,102),
+    IPAddress(192,168,1,101),
     IPAddress(192,168,1,1),
     IPAddress(255,255,255,0),
     IPAddress(192,168,1,255)
@@ -97,7 +95,7 @@ WifiNetwork networks[] = {
   {
     "dd-wrtt",
     "FTZWCZM2KTZJ",
-    IPAddress(192,168,1,102),
+    IPAddress(192,168,1,101),
     IPAddress(192,168,1,1),
     IPAddress(255,255,255,0),
     IPAddress(192,168,1,255)
@@ -345,33 +343,22 @@ void loop() {
   boton1State = !digitalRead(boton1Pin);
   boton2State = !digitalRead(boton2Pin);
 
-  OSCBundle bundle;
+  OSCMessage msg(oscAddress);
 
-  OSCMessage msgMac(addr_mac);
-  msgMac.add(macAddressStr.c_str());
-  bundle.add(msgMac);
-
-  OSCMessage msgSens(addr_sensores);
-  msgSens.add(wma_x)
-         .add(wma_y)
-         .add(wma_z)
-         .add(wma_rol)
-         .add(wma_pic)
-         .add(wma_yaw);
-  bundle.add(msgSens);
-
-  OSCMessage msgB1(addr_boton1);
-  msgB1.add(0.0f + boton1State);
-  bundle.add(msgB1);
-
-  OSCMessage msgB2(addr_boton2);
-  msgB2.add(0.0f + boton2State);
-  bundle.add(msgB2);
+  msg.add(macAddressStr.c_str());
+  msg.add(wma_x);
+  msg.add(wma_y);
+  msg.add(wma_z);
+  msg.add(wma_rol);
+  msg.add(wma_pic);
+  msg.add(wma_yaw);
+  msg.add((int32_t)boton1State);
+  msg.add((int32_t)boton2State);
 
   Udp.beginPacket(outIp, outPort);
-  bundle.send(Udp);
+  msg.send(Udp);
   Udp.endPacket();
-  bundle.empty();
+  msg.empty();
 
   delay(mseg_delay);
 }
