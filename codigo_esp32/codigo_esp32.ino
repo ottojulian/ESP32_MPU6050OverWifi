@@ -72,43 +72,12 @@ WifiNetwork networks[] = {
     IPAddress(255,255,255,0),
     IPAddress(192,168,0,100)
   },
-
-  {
-    "superDDL 2.4",
-    "FTZWCZM2KTZJ",
+    "SSID",
+    "PASSWD",
     IPAddress(192,168,0,101),
     IPAddress(192,168,0,1),
     IPAddress(255,255,255,0),
-    IPAddress(192,168,0,255)
-  },
-
-  {
-    "LAB1507",
-    "7051BAL!",
-    IPAddress(10,1,101,170),
-    IPAddress(10,1,103,254),
-    IPAddress(255,255,252,0),
-    IPAddress(10,1,103,255)
-  },
-
-  {
-    "lowpoly99",
-    "lowpoly99",
-    IPAddress(192,168,1,101),
-    IPAddress(192,168,1,1),
-    IPAddress(255,255,255,0),
-    IPAddress(192,168,1,255)
-  },
-
-  {
-    "dd-wrtt",
-    "FTZWCZM2KTZJ",
-    IPAddress(192,168,1,101),
-    IPAddress(192,168,1,1),
-    IPAddress(255,255,255,0),
-    IPAddress(192,168,1,255)
-  }
-
+    IPAddress(192,168,0,100) //IP PC
 };
 
 const int networkCount = sizeof(networks) / sizeof(networks[0]);
