@@ -2,57 +2,43 @@
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <OSCMessage.h>
-#include <OSCBundle.h>
 #include <WiFiUdp.h>
 #include <WiFi.h>
+#include <MadgwickAHRS.h>
 
 ////////////////////////////////
 //////// INIT VARIABLES ////////
 ////////////////////////////////
 
 unsigned long lastUdpRestart = 0;
-const unsigned long udpRestartInterval = 15000; // 15 seconds
+const unsigned long udpRestartInterval = 15000;
 
-// ---------- LOOP RATE ----------
 int mseg_delay = 20;
 
-// ---------- OSC ADDRESSES ----------
+const char* oscAddress = "/tracker";
 
-const char addr_loopRate[]  = "/loopRate";
-const char addr_ewmaAlpha[] = "/ewmaAlpha";
-const char* oscAddress = "/player1";
-
-// ---------- BOTONES ----------
 const int boton1Pin = 33;
 const int boton2Pin = 32;
-bool boton1State = false;
-bool boton2State = false;
 
-// ---------- LED RGB (ÁNODO COMÚN) ----------
 const int ledR = 27;
 const int ledG = 26;
 const int ledB = 25;
 
-// ---------- FLAG WIFI ----------
-bool wifiReconnecting = false;
-
-// ---------- EWMA ----------
-float alpha = 0.2;
-float wma_x = 0.0;
-float wma_y = 0.0;
-float wma_z = 0.0;
-float wma_rol = 0.0;
-float wma_pic = 0.0;
-float wma_yaw = 0.0;
-
-// ---------- MAC ADDRESS ----------
 String macAddressStr = "";
+
+// -------------------------
+// FILTER
+// -------------------------
+
+Madgwick filter;
+
+// OUTPUT QUATERNION
+float qw, qx, qy, qz;
 
 ////////////////////////////////
 //////// NETWORK SETUP /////////
 ////////////////////////////////
 
-// ---------- NETWORK STRUCT ----------
 struct WifiNetwork {
   const char* ssid;
   const char* pass;
@@ -62,61 +48,43 @@ struct WifiNetwork {
   IPAddress outIp;
 };
 
-// ---------- NETWORK LIST ----------
 WifiNetwork networks[] = {
   {
-    "QC_WLAN",
-    "748159263",
-    IPAddress(192,168,0,101),
-    IPAddress(192,168,0,1),
-    IPAddress(255,255,255,0),
-    IPAddress(192,168,0,100)
-  },
-    "SSID",
-    "PASSWD",
-    IPAddress(192,168,0,101),
-    IPAddress(192,168,0,1),
-    IPAddress(255,255,255,0),
-    IPAddress(192,168,0,100) //IP PC
+    "LAB1507",
+    "7051BAL!",
+    IPAddress(10,1,101,170),
+    IPAddress(10,1,103,254),
+    IPAddress(255,255,252,0),
+    IPAddress(10,1,103,255)
+  }
 };
 
 const int networkCount = sizeof(networks) / sizeof(networks[0]);
 
-IPAddress staticIP;
-IPAddress gateway;
-IPAddress subnet;
 IPAddress outIp;
-
-// UDP
-const unsigned int outPort   = 9000;
+const unsigned int outPort = 9000;
 const unsigned int localPort = 8000;
-
-////////////////////////////////
-////////// INSTANCIAS //////////
-////////////////////////////////
 
 WiFiUDP Udp;
 Adafruit_MPU6050 mpu;
 
 ////////////////////////////////
-////////// FUNCIONES ///////////
+//////// LED UTILS /////////////
 ////////////////////////////////
-void refreshUDP() {
-  if (millis() - lastUdpRestart > udpRestartInterval) {
-    Serial.println("Refreshing UDP socket");
-    Udp.stop();
-    delay(10);
-    Udp.begin(localPort);
-    lastUdpRestart = millis();
-  }
+
+void setLed(bool r, bool g, bool b) {
+  digitalWrite(ledR, r ? LOW : HIGH);
+  digitalWrite(ledG, g ? LOW : HIGH);
+  digitalWrite(ledB, b ? LOW : HIGH);
 }
+
+////////////////////////////////
+//////// WIFI /////////////////
+////////////////////////////////
 
 bool connectToKnownWiFi() {
 
   for (int i = 0; i < networkCount; i++) {
-
-    Serial.print("Intentando red: ");
-    Serial.println(networks[i].ssid);
 
     WiFi.disconnect(true);
     delay(200);
@@ -139,15 +107,7 @@ bool connectToKnownWiFi() {
     }
 
     if (WiFi.status() == WL_CONNECTED) {
-
-      staticIP = networks[i].staticIP;
-      gateway  = networks[i].gateway;
-      subnet   = networks[i].subnet;
-      outIp    = networks[i].outIp;
-
-      Serial.println("Conectado a:");
-      Serial.println(networks[i].ssid);
-
+      outIp = networks[i].outIp;
       return true;
     }
   }
@@ -155,121 +115,41 @@ bool connectToKnownWiFi() {
   return false;
 }
 
-void loopRate(OSCMessage &msg) {
-  if (msg.isInt(0)) {
-    if (msg.getInt(0) >= 5) {
-      mseg_delay = msg.getInt(0);
-      Serial.print("Nuevo Loop Rate: ");
-      Serial.println(mseg_delay);
-    }
-  }
-}
-
-void ewmaAlpha(OSCMessage &msg) {
-  if (msg.isFloat(0)) {
-    float newAlpha = msg.getFloat(0);
-    if (newAlpha >= 0.0 && newAlpha <= 1.0) {
-      alpha = newAlpha;
-      Serial.print("Nuevo Alpha: ");
-      Serial.println(alpha);
-    }
-  }
-}
-
-void receiveMessage() {
-  OSCMessage inmsg;
-  int size = Udp.parsePacket();
-  if (size > 0) {
-    while (size--) inmsg.fill(Udp.read());
-    if (!inmsg.hasError()) {
-      inmsg.dispatch(addr_loopRate, loopRate);
-      inmsg.dispatch(addr_ewmaAlpha, ewmaAlpha);
-    }
-  }
-}
-
-////////////////////////////////
-////////// LED UTILS ///////////
-////////////////////////////////
-
-void setLed(bool r, bool g, bool b) {
-  digitalWrite(ledR, r ? LOW : HIGH);
-  digitalWrite(ledG, g ? LOW : HIGH);
-  digitalWrite(ledB, b ? LOW : HIGH);
-}
-
 ////////////////////////////////
 //////////// SETUP /////////////
 ////////////////////////////////
 
-void setup(void) {
-  delay(1000);
+void setup() {
+
   Serial.begin(9600);
-  
-  Serial.println("////////////////////////////////");
-  Serial.println("////////// JOYSTICK 1 //////////");
-  Serial.println("////////////////////////////////");
 
   pinMode(ledR, OUTPUT);
   pinMode(ledG, OUTPUT);
   pinMode(ledB, OUTPUT);
 
-  setLed(false, false, false);
-
   WiFi.setSleep(false);
-
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true);
-  delay(100);
 
   while (!connectToKnownWiFi()) {
-    Serial.println("No se pudo conectar a ninguna red conocida");
     delay(2000);
   }
 
-  Serial.println("WiFi conectado");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.print("Gateway: ");
-  Serial.println(WiFi.gatewayIP());
-  Serial.print("Subnet: ");
-  Serial.println(WiFi.subnetMask());
-
   Udp.begin(localPort);
-  Serial.print("Puerto UDP: ");
-  Serial.println(localPort);
 
   macAddressStr = WiFi.macAddress();
-  Serial.print("MAC ESP32: ");
-  Serial.println(WiFi.macAddress());
 
   pinMode(boton1Pin, INPUT_PULLUP);
   pinMode(boton2Pin, INPUT_PULLUP);
 
   if (!mpu.begin()) {
-    Serial.println("MPU6050 no encontrado");
-    while (true) {
-      setLed(true, false, false);
-      delay(100);  
-      setLed(false, false, false);
-      delay(100);
-      setLed(true, false, false);
-      delay(100);  
-      setLed(false, false, false);
-      delay(1000);
-      if(mpu.begin()) {
-        break;
-      }
-    }
+    while (1);
   }
 
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 
-  Serial.println("MPU6050 OK");
-
-  setLed(false, true, false);
+  filter.begin(100);
 }
 
 ////////////////////////////////
@@ -277,60 +157,91 @@ void setup(void) {
 ////////////////////////////////
 
 void loop() {
-/*
-  if (WiFi.status() != WL_CONNECTED) {
 
-    Serial.println("WiFi desconectado");
+  // IMPORTANT: we are NOT using Madgwick output here (pure stable IMU tilt model)
 
-    while (!connectToKnownWiFi()) {
-      setLed(false, true, true);
-      delay(200);
-      setLed(false, false, false);
-      delay(200);
-      Serial.println("Reintentando conexión...");
-    }
-
-    Serial.println("WiFi reconectado");
-    Serial.print("IP: "); Serial.println(WiFi.localIP());
-    Serial.print("Gateway: "); Serial.println(WiFi.gatewayIP());
-    Serial.print("Subnet: "); Serial.println(WiFi.subnetMask());
-
-    Udp.begin(localPort);
-    Serial.print("Puerto UDP: "); Serial.println(localPort);
-
-    Serial.print("MAC ESP32: "); Serial.println(WiFi.macAddress());
-
-    setLed(false, true, false);
-  }
-
-  receiveMessage();
-*/
-
-  refreshUDP();
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  wma_x   = alpha * a.acceleration.x + (1 - alpha) * wma_x;
-  wma_y   = alpha * a.acceleration.y + (1 - alpha) * wma_y;
-  wma_z   = alpha * a.acceleration.z + (1 - alpha) * wma_z;
-  wma_rol = alpha * g.gyro.x         + (1 - alpha) * wma_rol;
-  wma_pic = alpha * g.gyro.y         + (1 - alpha) * wma_pic;
-  wma_yaw = alpha * g.gyro.z         + (1 - alpha) * wma_yaw;
 
-  boton1State = !digitalRead(boton1Pin);
-  boton2State = !digitalRead(boton2Pin);
+  // -------------------------
+  // Angular vel
+  // -------------------------
+
+  float gx = g.gyro.x;
+  float gy = g.gyro.y;   // FIXED SIGN
+  float gz = g.gyro.z;
+
+  // -------------------------
+  // AXIS CORRECTION
+  // -------------------------
+
+  float ax = a.acceleration.x;
+  float ay = a.acceleration.y;   
+  float az = a.acceleration.z;
+
+  // -------------------------
+  // TILT-BASED ORIENTATION
+  // -------------------------
+
+  float roll  = atan2(ay, az);
+  float pitch = atan2(-ax, sqrt(ay * ay + az * az));
+  float yaw   = 0.0f;
+
+  // -------------------------
+  // QUATERNION BUILD
+  // -------------------------
+
+  float cy = cos(yaw * 0.5f);
+  float sy = sin(yaw * 0.5f);
+  float cp = cos(pitch * 0.5f);
+  float sp = sin(pitch * 0.5f);
+  float cr = cos(roll * 0.5f);
+  float sr = sin(roll * 0.5f);
+
+  qw = cr * cp * cy + sr * sp * sy;
+  qx = sr * cp * cy - cr * sp * sy;
+  qy = cr * sp * cy + sr * cp * sy;
+  qz = cr * cp * sy - sr * sp * cy;
+
+  // -------------------------
+  // NORMALIZATION (IMPORTANT)
+  // -------------------------
+
+  float norm = sqrt(qw*qw + qx*qx + qy*qy + qz*qz);
+
+  if (norm > 0.0001f) {
+    qw /= norm;
+    qx /= norm;
+    qy /= norm;
+    qz /= norm;
+  }
+
+  // -------------------------
+  // BUTTONS
+  // -------------------------
+
+  int b1 = !digitalRead(boton1Pin);
+  int b2 = !digitalRead(boton2Pin);
+
+  // -------------------------
+  // OSC (VVVV ORDER: X Y Z W)
+  // -------------------------
 
   OSCMessage msg(oscAddress);
 
-  msg.add(macAddressStr.c_str());
-  msg.add(wma_x);
-  msg.add(wma_y);
-  msg.add(wma_z);
-  msg.add(wma_rol);
-  msg.add(wma_pic);
-  msg.add(wma_yaw);
-  msg.add((int32_t)boton1State);
-  msg.add((int32_t)boton2State);
+  msg.add(qx);
+  msg.add(qy);
+  msg.add(qz);
+  msg.add(qw);
+
+  // Giroscopio (raw, for visualization / debugging / physics)
+  msg.add(gx);
+  msg.add(gy);
+  msg.add(gz);
+
+  msg.add((int32_t)b1);
+  msg.add((int32_t)b2);
 
   Udp.beginPacket(outIp, outPort);
   msg.send(Udp);
