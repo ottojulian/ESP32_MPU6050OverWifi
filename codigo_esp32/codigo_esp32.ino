@@ -20,7 +20,7 @@ int mseg_delay = 20;
 
 const char addr_loopRate[]  = "/loopRate";
 const char addr_ewmaAlpha[] = "/ewmaAlpha";
-const char* oscAddress = "/player1";
+const char* oscAddress = "/player";
 
 // ---------- BOTONES ----------
 const int boton1Pin = 33;
@@ -72,12 +72,14 @@ WifiNetwork networks[] = {
     IPAddress(255,255,255,0),
     IPAddress(192,168,0,100)
   },
+  {
     "SSID",
     "PASSWD",
     IPAddress(192,168,0,101),
     IPAddress(192,168,0,1),
     IPAddress(255,255,255,0),
-    IPAddress(192,168,0,100) //IP PC
+    IPAddress(192,168,0,100)
+  }
 };
 
 const int networkCount = sizeof(networks) / sizeof(networks[0]);
@@ -277,7 +279,7 @@ void setup(void) {
 ////////////////////////////////
 
 void loop() {
-/*
+
   if (WiFi.status() != WL_CONNECTED) {
 
     Serial.println("WiFi desconectado");
@@ -304,7 +306,7 @@ void loop() {
   }
 
   receiveMessage();
-*/
+
 
   refreshUDP();
   sensors_event_t a, g, temp;
