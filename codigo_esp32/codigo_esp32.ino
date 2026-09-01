@@ -12,16 +12,13 @@
 //////// INIT VARIABLES ////////
 ////////////////////////////////
 
-unsigned long lastUdpRestart = 0;
-const unsigned long udpRestartInterval = 15000;
-
 // ---------- LOOP RATE ----------
 int mseg_delay = 20;
 
 // ---------- OSC ADDRESSES ----------
 const char addr_loopRate[] = "/loopRate";
 const char addr_ewmaAlpha[] = "/ewmaAlpha";
-const char* oscAddress = "/player";
+String oscAddress = "/player1";
 
 // ---------- BOTONES ----------
 const int boton1Pin = 33;
@@ -29,13 +26,10 @@ const int boton2Pin = 32;
 bool boton1State = false;
 bool boton2State = false;
 
-// ---------- LED RGB (ÁNODO COMÚN) ----------
+// ---------- LED RGB ----------
 const int ledR = 27;
 const int ledG = 26;
 const int ledB = 25;
-
-// ---------- FLAG WIFI ----------
-bool wifiReconnecting = false;
 
 // ---------- EWMA ----------
 float alpha = 0.2;
@@ -46,11 +40,19 @@ float wma_rol = 0.0;
 float wma_pic = 0.0;
 float wma_yaw = 0.0;
 
-// ---------- MAC ADDRESS ----------
+// ---------- MAC ----------
 String macAddressStr = "";
 
-// ---------- JOYSTICK GROUP ----------
+// ---------- JOYSTICK CONFIG ----------
 String joystickGroup = "A";
+
+// ---------- UDP PORT CONFIG ----------
+unsigned int controlPort = 9000;
+
+// ---------- DISCOVERY ----------
+const unsigned int discoveryPort = 8001;
+const unsigned long discoveryInterval = 1000;
+unsigned long lastDiscovery = 0;
 
 // ---------- WEB SERVER ----------
 WebServer server(80);
@@ -90,14 +92,12 @@ const int networkCount = sizeof(networks) / sizeof(networks[0]);
 
 IPAddress outIp;
 
-const unsigned int outPort = 9000;
-const unsigned int localPort = 8000;
-
 ////////////////////////////////
 ////////// INSTANCIAS //////////
 ////////////////////////////////
 
 WiFiUDP Udp;
+WiFiUDP discoveryUdp;
 Adafruit_MPU6050 mpu;
 
 ////////////////////////////////
@@ -105,17 +105,13 @@ Adafruit_MPU6050 mpu;
 ////////////////////////////////
 
 // ============================================================
-// UDP REFRESH
+// LED
 // ============================================================
 
-void refreshUDP() {
-  if (millis() - lastUdpRestart > udpRestartInterval) {
-    Serial.println("Refreshing UDP socket");
-    Udp.stop();
-    delay(10);
-    Udp.begin(localPort);
-    lastUdpRestart = millis();
-  }
+void setLed(bool r, bool g, bool b) {
+  digitalWrite(ledR, r ? LOW : HIGH);
+  digitalWrite(ledG, g ? LOW : HIGH);
+  digitalWrite(ledB, b ? LOW : HIGH);
 }
 
 // ============================================================
@@ -129,6 +125,7 @@ bool connectToKnownWiFi() {
 
     WiFi.disconnect(true);
     delay(200);
+
     WiFi.begin(networks[i].ssid, networks[i].pass);
 
     int timeout = 20;
@@ -157,6 +154,128 @@ bool connectToKnownWiFi() {
 }
 
 // ============================================================
+// LOAD CONFIGURATION
+// ============================================================
+
+void loadConfiguration() {
+  preferences.begin("joystick", false);
+
+  joystickGroup = preferences.getString("group", "A");
+  oscAddress = preferences.getString("address", "/player1");
+  controlPort = preferences.getUInt("port", 9000);
+  alpha = preferences.getFloat("alpha", 0.2);
+
+  Serial.println("Configuración almacenada:");
+  Serial.print("Grupo: ");
+  Serial.println(joystickGroup);
+  Serial.print("Address: ");
+  Serial.println(oscAddress);
+  Serial.print("UDP Port: ");
+  Serial.println(controlPort);
+  Serial.print("EWMA Alpha: ");
+  Serial.println(alpha);
+}
+
+// ============================================================
+// SAVE GROUP
+// ============================================================
+
+bool saveJoystickGroup(String newGroup) {
+  newGroup.trim();
+
+  if (newGroup.length() != 1)
+    return false;
+
+  char group = newGroup.charAt(0);
+
+  if (group >= 'a' && group <= 'z')
+    group -= 32;
+
+  if (group < 'A' || group > 'Z')
+    return false;
+
+  joystickGroup = String(group);
+  preferences.putString("group", joystickGroup);
+
+  Serial.print("Nuevo grupo guardado: ");
+  Serial.println(joystickGroup);
+
+  return true;
+}
+
+// ============================================================
+// SAVE ADDRESS
+// ============================================================
+
+bool saveOscAddress(String newAddress) {
+  newAddress.trim();
+
+  if (newAddress.length() == 0)
+    return false;
+
+  if (newAddress.charAt(0) != '/')
+    return false;
+
+  oscAddress = newAddress;
+  preferences.putString("address", oscAddress);
+
+  Serial.print("Nuevo OSC Address guardado: ");
+  Serial.println(oscAddress);
+
+  return true;
+}
+
+// ============================================================
+// SAVE UDP PORT
+// ============================================================
+
+bool saveControlPort(String newPort) {
+  newPort.trim();
+
+  int port = newPort.toInt();
+
+  if (port < 1 || port > 65535)
+    return false;
+
+  if (port == discoveryPort)
+    return false;
+
+  controlPort = (unsigned int)port;
+
+  preferences.putUInt("port", controlPort);
+
+  Udp.stop();
+  delay(10);
+  Udp.begin(controlPort);
+
+  Serial.print("Nuevo UDP Port guardado: ");
+  Serial.println(controlPort);
+
+  return true;
+}
+
+// ============================================================
+// SAVE EWMA
+// ============================================================
+
+bool saveAlpha(String newAlpha) {
+  newAlpha.trim();
+
+  float newValue = newAlpha.toFloat();
+
+  if (newValue < 0.0 || newValue > 1.0)
+    return false;
+
+  alpha = newValue;
+  preferences.putFloat("alpha", alpha);
+
+  Serial.print("Nuevo EWMA Alpha guardado: ");
+  Serial.println(alpha);
+
+  return true;
+}
+
+// ============================================================
 // OSC SETTINGS
 // ============================================================
 
@@ -164,6 +283,7 @@ void loopRate(OSCMessage &msg) {
   if (msg.isInt(0)) {
     if (msg.getInt(0) >= 5) {
       mseg_delay = msg.getInt(0);
+
       Serial.print("Nuevo Loop Rate: ");
       Serial.println(mseg_delay);
     }
@@ -176,6 +296,7 @@ void ewmaAlpha(OSCMessage &msg) {
 
     if (newAlpha >= 0.0 && newAlpha <= 1.0) {
       alpha = newAlpha;
+
       Serial.print("Nuevo Alpha: ");
       Serial.println(alpha);
     }
@@ -187,7 +308,8 @@ void receiveMessage() {
   int size = Udp.parsePacket();
 
   if (size > 0) {
-    while (size--) inmsg.fill(Udp.read());
+    while (size--)
+      inmsg.fill(Udp.read());
 
     if (!inmsg.hasError()) {
       inmsg.dispatch(addr_loopRate, loopRate);
@@ -197,94 +319,54 @@ void receiveMessage() {
 }
 
 // ============================================================
-// LED UTILS
+// DISCOVERY BEACON
 // ============================================================
 
-void setLed(bool r, bool g, bool b) {
-  digitalWrite(ledR, r ? LOW : HIGH);
-  digitalWrite(ledG, g ? LOW : HIGH);
-  digitalWrite(ledB, b ? LOW : HIGH);
+void sendDiscovery() {
+  if (millis() - lastDiscovery < discoveryInterval)
+    return;
+
+  lastDiscovery = millis();
+
+  OSCMessage msg("/joystick");
+
+  msg.add(macAddressStr.c_str());
+  msg.add(WiFi.localIP().toString().c_str());
+  msg.add(joystickGroup.c_str());
+  msg.add(oscAddress.c_str());
+  msg.add((int32_t)controlPort);
+
+  discoveryUdp.beginPacket(
+    IPAddress(255, 255, 255, 255),
+    discoveryPort
+  );
+
+  msg.send(discoveryUdp);
+  discoveryUdp.endPacket();
+
+  msg.empty();
 }
 
 // ============================================================
-// FIND ROUTINE
+// FIND
 // ============================================================
 
 void findJoystick() {
-  Serial.println("FIND activado");
+  Serial.println("FIND!");
 
-  // ON
-  setLed(false, true, false);
-  delay(200);
+  setLed(true, true, true);
+  delay(150);
 
-  // OFF
   setLed(false, false, false);
-  delay(200);
+  delay(150);
 
-  // ON
-  setLed(false, true, false);
-  delay(200);
+  setLed(true, true, true);
+  delay(150);
 
-  // OFF
   setLed(false, false, false);
-  delay(200);
+  delay(150);
 
-  // ON final
   setLed(false, true, false);
-
-  Serial.println("FIND terminado");
-
-  // Volver a la interfaz principal
-  server.sendHeader("Location", "/");
-  server.send(303);
-}
-
-// ============================================================
-// LOAD GROUP FROM MEMORY
-// ============================================================
-
-void loadJoystickGroup() {
-  preferences.begin("joystick", false);
-  joystickGroup = preferences.getString("group", "A");
-
-  Serial.print("Grupo almacenado: ");
-  Serial.println(joystickGroup);
-}
-
-// ============================================================
-// SAVE GROUP TO MEMORY
-// ============================================================
-
-bool saveJoystickGroup(String newGroup) {
-  if (newGroup.length() != 1) return false;
-
-  char group = newGroup.charAt(0);
-
-  if (group < 'A' || group > 'Z') return false;
-
-  joystickGroup = newGroup;
-  preferences.putString("group", joystickGroup);
-
-  Serial.print("Nuevo grupo guardado: ");
-  Serial.println(joystickGroup);
-
-  return true;
-}
-
-// ============================================================
-// SAVE EWMA TO MEMORY
-// ============================================================
-
-bool saveAlpha(float newAlpha) {
-  if (newAlpha < 0.0 || newAlpha > 1.0) return false;
-
-  alpha = newAlpha;
-  preferences.putFloat("alpha", alpha);
-
-  Serial.print("Nuevo EWMA Alpha guardado: ");
-  Serial.println(alpha);
-
-  return true;
 }
 
 // ============================================================
@@ -296,158 +378,156 @@ void handleRoot() {
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Joystick Configuration</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 500px;
-      margin: 40px auto;
-      padding: 20px;
-      background: #f5f5f5;
-    }
-
-    .container {
-      background: white;
-      padding: 25px;
-      border-radius: 10px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-
-    h1 {
-      margin-top: 0;
-    }
-
-    .info {
-      background: #eeeeee;
-      padding: 15px;
-      border-radius: 8px;
-      margin-bottom: 25px;
-    }
-
-    .info p {
-      margin: 8px 0;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 8px;
-      font-weight: bold;
-    }
-
-    input {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 12px;
-      font-size: 18px;
-      margin-bottom: 20px;
-    }
-
-    button {
-      width: 100%;
-      padding: 14px;
-      font-size: 18px;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      margin-bottom: 10px;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Joystick Configuration</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  max-width: 500px;
+  margin: 40px auto;
+  padding: 20px;
+  background: #f5f5f5;
+}
+.container {
+  background: white;
+  padding: 25px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+h1 {
+  margin-top: 0;
+}
+.info {
+  background: #eeeeee;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 25px;
+}
+.info p {
+  margin: 8px 0;
+}
+label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: bold;
+}
+input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px;
+  font-size: 18px;
+  margin-bottom: 20px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+button {
+  width: 100%;
+  padding: 14px;
+  font-size: 18px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.find {
+  background: #ddd;
+}
+.save {
+  background: #ccc;
+}
+</style>
 </head>
-
 <body>
 <div class="container">
+<h1>Joystick Configuration</h1>
 
-  <h1>Joystick Configuration</h1>
-
-  <div class="info">
-    <p>
-      <strong>MAC:</strong><br>
+<div class="info">
+<p><strong>MAC:</strong><br>
 )rawliteral";
 
   html += WiFi.macAddress();
 
   html += R"rawliteral(
-    </p>
-
-    <p>
-      <strong>IP:</strong><br>
+</p>
+<p><strong>IP:</strong><br>
 )rawliteral";
 
   html += WiFi.localIP().toString();
 
   html += R"rawliteral(
-    </p>
-
-    <p>
-      <strong>Current Group:</strong><br>
+</p>
+<p><strong>Current Group:</strong><br>
 )rawliteral";
 
   html += joystickGroup;
 
   html += R"rawliteral(
-    </p>
+</p>
+<p><strong>OSC Address:</strong><br>
+)rawliteral";
 
-    <p>
-      <strong>EWMA Alpha:</strong><br>
+  html += oscAddress;
+
+  html += R"rawliteral(
+</p>
+<p><strong>UDP Port:</strong><br>
+)rawliteral";
+
+  html += String(controlPort);
+
+  html += R"rawliteral(
+</p>
+<p><strong>EWMA Alpha:</strong><br>
 )rawliteral";
 
   html += String(alpha, 3);
 
   html += R"rawliteral(
-    </p>
-  </div>
+</p>
+</div>
 
-  <form action="/find" method="POST">
-    <button type="submit">FIND</button>
-  </form>
+<form action="/find" method="POST">
+<button class="find" type="submit">FIND</button>
+</form>
 
-  <form action="/save" method="POST">
+<form action="/save" method="POST">
 
-    <label for="group">
-      Group
-    </label>
-
-    <input
-      type="text"
-      name="group"
-      id="group"
-      value=")rawliteral";
+<label for="group">Group</label>
+<input type="text" name="group" id="group"
+       value=")rawliteral";
 
   html += joystickGroup;
 
-  html += R"rawliteral("
-      maxlength="1"
-      pattern="[A-Za-z]"
-      required
-    >
+  html += R"rawliteral(" maxlength="1">
 
-    <label for="alpha">
-      EWMA Alpha
-    </label>
+<label for="address">OSC Address</label>
+<input type="text" name="address" id="address"
+       value=")rawliteral";
 
-    <input
-      type="number"
-      name="alpha"
-      id="alpha"
-      value=")rawliteral";
+  html += oscAddress;
+
+  html += R"rawliteral(">
+
+<label for="port">UDP Port</label>
+<input type="text" name="port" id="port"
+       value=")rawliteral";
+
+  html += String(controlPort);
+
+  html += R"rawliteral(" inputmode="numeric">
+
+<label for="alpha">EWMA Alpha</label>
+<input type="text" name="alpha" id="alpha"
+       value=")rawliteral";
 
   html += String(alpha, 3);
 
-  html += R"rawliteral("
-      min="0"
-      max="1"
-      step="0.01"
-      required
-    >
+  html += R"rawliteral(">
 
-    <button type="submit">
-      SAVE
-    </button>
+<button class="save" type="submit">SAVE</button>
 
-  </form>
-
+</form>
 </div>
 </body>
 </html>
@@ -457,122 +537,137 @@ void handleRoot() {
 }
 
 // ============================================================
-// SAVE WEB REQUEST
+// FIND REQUEST
+// ============================================================
+
+void handleFind() {
+  findJoystick();
+  handleRoot();
+}
+
+// ============================================================
+// SAVE REQUEST
 // ============================================================
 
 void handleSave() {
-  if (!server.hasArg("group") || !server.hasArg("alpha")) {
-    server.send(400, "text/plain", "Missing configuration");
-    return;
+  bool success = true;
+
+  if (server.hasArg("group")) {
+    if (!saveJoystickGroup(server.arg("group")))
+      success = false;
   }
 
-  String newGroup = server.arg("group");
-  newGroup.toUpperCase();
-
-  float newAlpha = server.arg("alpha").toFloat();
-
-  if (!saveJoystickGroup(newGroup)) {
-    server.send(400, "text/plain", "Invalid group");
-    return;
+  if (server.hasArg("address")) {
+    if (!saveOscAddress(server.arg("address")))
+      success = false;
   }
 
-  if (!saveAlpha(newAlpha)) {
-    server.send(400, "text/plain", "Invalid EWMA alpha");
-    return;
+  if (server.hasArg("port")) {
+    if (!saveControlPort(server.arg("port")))
+      success = false;
+  }
+
+  if (server.hasArg("alpha")) {
+    if (!saveAlpha(server.arg("alpha")))
+      success = false;
   }
 
   String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Configuration Saved</title>
-
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 500px;
-      margin: 40px auto;
-      padding: 20px;
-      background: #f5f5f5;
-    }
-
-    .container {
-      background: white;
-      padding: 25px;
-      border-radius: 10px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-
-    h1 {
-      margin-top: 0;
-    }
-
-    .info {
-      background: #eeeeee;
-      padding: 15px;
-      border-radius: 8px;
-      margin-bottom: 25px;
-    }
-
-    .info p {
-      margin: 8px 0;
-    }
-
-    a {
-      display: block;
-      width: 100%;
-      box-sizing: border-box;
-      padding: 14px;
-      font-size: 18px;
-      text-align: center;
-      text-decoration: none;
-      color: black;
-      background: #eeeeee;
-      border-radius: 6px;
-    }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration Saved</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  max-width: 500px;
+  margin: 40px auto;
+  padding: 20px;
+  background: #f5f5f5;
+}
+.container {
+  background: white;
+  padding: 25px;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+h1 {
+  margin-top: 0;
+}
+.info {
+  background: #eeeeee;
+  padding: 15px;
+  border-radius: 8px;
+  margin-bottom: 25px;
+}
+.info p {
+  margin: 8px 0;
+}
+button {
+  width: 100%;
+  padding: 14px;
+  font-size: 18px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+</style>
 </head>
-
 <body>
 <div class="container">
+<h1>)rawliteral";
 
-  <h1>Configuration Saved</h1>
+  html += success ? "Configuration saved" : "Configuration error";
 
-  <div class="info">
+  html += R"rawliteral(</h1>
 
-    <p>
-      <strong>Group:</strong><br>
+<div class="info">
+<p><strong>Group:</strong><br>
 )rawliteral";
 
   html += joystickGroup;
 
   html += R"rawliteral(
-    </p>
+</p>
 
-    <p>
-      <strong>EWMA Alpha:</strong><br>
+<p><strong>OSC Address:</strong><br>
+)rawliteral";
+
+  html += oscAddress;
+
+  html += R"rawliteral(
+</p>
+
+<p><strong>UDP Port:</strong><br>
+)rawliteral";
+
+  html += String(controlPort);
+
+  html += R"rawliteral(
+</p>
+
+<p><strong>EWMA Alpha:</strong><br>
 )rawliteral";
 
   html += String(alpha, 3);
 
   html += R"rawliteral(
-    </p>
+</p>
+</div>
 
-    <p>
-      The configuration has been stored in the ESP32 memory.
-    </p>
+<p>
+The configuration has been stored in the ESP32 memory.
+</p>
 
-    <p>
-      The settings will survive a reboot.
-    </p>
+<p>
+The settings will survive a reboot.
+</p>
 
-  </div>
-
-  <a href="/">
-    Back to configuration
-  </a>
+<form action="/" method="GET">
+<button type="submit">Back to configuration</button>
+</form>
 
 </div>
 </body>
@@ -583,7 +678,7 @@ void handleSave() {
 }
 
 // ============================================================
-// JSON CONFIGURATION ENDPOINT
+// JSON CONFIGURATION
 // ============================================================
 
 void handleConfig() {
@@ -601,6 +696,14 @@ void handleConfig() {
   json += joystickGroup;
   json += "\",";
 
+  json += "\"address\":\"";
+  json += oscAddress;
+  json += "\",";
+
+  json += "\"port\":";
+  json += String(controlPort);
+  json += ",";
+
   json += "\"alpha\":";
   json += String(alpha, 3);
 
@@ -610,22 +713,20 @@ void handleConfig() {
 }
 
 // ============================================================
-// START WEB SERVER
+// WEB SERVER
 // ============================================================
 
 void startWebServer() {
   server.on("/", HTTP_GET, handleRoot);
-  server.on("/find", HTTP_POST, findJoystick);
+  server.on("/find", HTTP_POST, handleFind);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/config", HTTP_GET, handleConfig);
 
   server.begin();
 
   Serial.println("Web server iniciado");
-
   Serial.print("Configuration page: http://");
   Serial.println(WiFi.localIP());
-
   Serial.print("Configuration API: http://");
   Serial.print(WiFi.localIP());
   Serial.println("/config");
@@ -635,36 +736,20 @@ void startWebServer() {
 // SETUP
 // ============================================================
 
-void setup(void) {
+void setup() {
   delay(1000);
   Serial.begin(9600);
 
   Serial.println("////////////////////////////////");
-  Serial.println("////////// JOYSTICK 1 //////////");
+  Serial.println("////////// JOYSTICK ////////////");
   Serial.println("////////////////////////////////");
 
   pinMode(ledR, OUTPUT);
   pinMode(ledG, OUTPUT);
   pinMode(ledB, OUTPUT);
-
   setLed(false, false, false);
 
-  // ----------------------------------------------------------
-  // Load saved configuration
-  // ----------------------------------------------------------
-
-  loadJoystickGroup();
-  alpha = preferences.getFloat("alpha", 0.2);
-
-  Serial.println("Configuración almacenada:");
-  Serial.print("Grupo: ");
-  Serial.println(joystickGroup);
-  Serial.print("EWMA Alpha: ");
-  Serial.println(alpha);
-
-  // ----------------------------------------------------------
-  // WiFi
-  // ----------------------------------------------------------
+  loadConfiguration();
 
   WiFi.setSleep(false);
   WiFi.mode(WIFI_STA);
@@ -677,50 +762,31 @@ void setup(void) {
   }
 
   Serial.println("WiFi conectado");
-
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
-
   Serial.print("Gateway: ");
   Serial.println(WiFi.gatewayIP());
-
   Serial.print("Subnet: ");
   Serial.println(WiFi.subnetMask());
 
-  // ----------------------------------------------------------
-  // UDP
-  // ----------------------------------------------------------
+  Udp.begin(controlPort);
+  discoveryUdp.begin(discoveryPort);
 
-  Udp.begin(localPort);
+  Serial.print("Control UDP port: ");
+  Serial.println(controlPort);
 
-  Serial.print("Puerto UDP: ");
-  Serial.println(localPort);
-
-  // ----------------------------------------------------------
-  // MAC
-  // ----------------------------------------------------------
+  Serial.print("Discovery UDP port: ");
+  Serial.println(discoveryPort);
 
   macAddressStr = WiFi.macAddress();
 
   Serial.print("MAC ESP32: ");
   Serial.println(macAddressStr);
 
-  // ----------------------------------------------------------
-  // WEB SERVER
-  // ----------------------------------------------------------
-
   startWebServer();
-
-  // ----------------------------------------------------------
-  // BUTTONS
-  // ----------------------------------------------------------
 
   pinMode(boton1Pin, INPUT_PULLUP);
   pinMode(boton2Pin, INPUT_PULLUP);
-
-  // ----------------------------------------------------------
-  // MPU6050
-  // ----------------------------------------------------------
 
   if (!mpu.begin()) {
     Serial.println("MPU6050 no encontrado");
@@ -735,7 +801,8 @@ void setup(void) {
       setLed(false, false, false);
       delay(1000);
 
-      if (mpu.begin()) break;
+      if (mpu.begin())
+        break;
     }
   }
 
@@ -748,6 +815,12 @@ void setup(void) {
   Serial.print("Grupo actual: ");
   Serial.println(joystickGroup);
 
+  Serial.print("OSC Address actual: ");
+  Serial.println(oscAddress);
+
+  Serial.print("UDP Port actual: ");
+  Serial.println(controlPort);
+
   Serial.print("EWMA Alpha actual: ");
   Serial.println(alpha);
 
@@ -759,15 +832,7 @@ void setup(void) {
 // ============================================================
 
 void loop() {
-  // ----------------------------------------------------------
-  // WEB SERVER
-  // ----------------------------------------------------------
-
   server.handleClient();
-
-  // ----------------------------------------------------------
-  // WIFI
-  // ----------------------------------------------------------
 
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi desconectado");
@@ -781,45 +846,22 @@ void loop() {
     }
 
     Serial.println("WiFi reconectado");
-
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
 
-    Serial.print("Gateway: ");
-    Serial.println(WiFi.gatewayIP());
-
-    Serial.print("Subnet: ");
-    Serial.println(WiFi.subnetMask());
-
-    Udp.begin(localPort);
-
-    Serial.print("Puerto UDP: ");
-    Serial.println(localPort);
-
-    Serial.print("MAC ESP32: ");
-    Serial.println(WiFi.macAddress());
+    Udp.begin(controlPort);
+    discoveryUdp.begin(discoveryPort);
 
     startWebServer();
 
     setLed(false, true, false);
   }
 
-  // ----------------------------------------------------------
-  // OSC INPUT
-  // ----------------------------------------------------------
-
   receiveMessage();
-
-  // ----------------------------------------------------------
-  // MPU6050
-  // ----------------------------------------------------------
+  sendDiscovery();
 
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-
-  // ----------------------------------------------------------
-  // EWMA
-  // ----------------------------------------------------------
 
   wma_x = alpha * a.acceleration.x + (1 - alpha) * wma_x;
   wma_y = alpha * a.acceleration.y + (1 - alpha) * wma_y;
@@ -829,54 +871,25 @@ void loop() {
   wma_pic = alpha * g.gyro.y + (1 - alpha) * wma_pic;
   wma_yaw = alpha * g.gyro.z + (1 - alpha) * wma_yaw;
 
-  // ----------------------------------------------------------
-  // BUTTONS
-  // ----------------------------------------------------------
-
   boton1State = !digitalRead(boton1Pin);
   boton2State = !digitalRead(boton2Pin);
 
-  // ----------------------------------------------------------
-  // OSC MESSAGE
-  // ----------------------------------------------------------
-
-  OSCMessage msg(oscAddress);
-
-  // [0] MAC
-  // [1] acceleration X
-  // [2] acceleration Y
-  // [3] acceleration Z
-  // [4] gyro X
-  // [5] gyro Y
-  // [6] gyro Z
-  // [7] button 1
-  // [8] button 2
+  OSCMessage msg(oscAddress.c_str());
 
   msg.add(macAddressStr.c_str());
-
   msg.add(wma_x);
   msg.add(wma_y);
   msg.add(wma_z);
-
   msg.add(wma_rol);
   msg.add(wma_pic);
   msg.add(wma_yaw);
-
   msg.add((int32_t)boton1State);
   msg.add((int32_t)boton2State);
 
-  // ----------------------------------------------------------
-  // SEND OSC
-  // ----------------------------------------------------------
-
-  Udp.beginPacket(outIp, outPort);
+  Udp.beginPacket(outIp, controlPort);
   msg.send(Udp);
   Udp.endPacket();
   msg.empty();
-
-  // ----------------------------------------------------------
-  // LOOP DELAY
-  // ----------------------------------------------------------
 
   delay(mseg_delay);
 }
